@@ -9,15 +9,22 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Background (*from the course site*)
+## Load the required libraries and seed the random number generator
 
-Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset).
+```{r initialize, results='hide', warning=FALSE}
+# Suppress package startup messages
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(rattle))
 
-## Goal of this project (*from the course site*)
+# Make the results reproducible.
+set.seed(315)
+```
 
-The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+## Building the model
 
-## Data
+The source of training and testing data was http://groupware.les.inf.puc-rio.br/har. Previewing the downloaded data revealed that missing values were either represented as null strings or explicitly labeled as "NA". 
+
+### Retrieving the data
 
 ```{r data_loading}
 # Load the training and testing data as prescribed in the instuctions.
@@ -25,65 +32,50 @@ training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-tr
                      header = T, na.strings = c("", "NA"))
 testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
                     header = T, na.strings = c("", "NA"))
-# Data source: http://groupware.les.inf.puc-rio.br/har. Note: prior to doing 
-# read.csv() on these data sets, I manually downloaded them and found that 1.
-# the files had headers, and 2. there were either "" and "NA" to represent
-# missing values.
 ```
 
-## Do initializations
 
-```{r initialize, results='hide', warning=FALSE}
-# Load the required libraries.
-suppressPackageStartupMessages(library(caret))
-suppressPackageStartupMessages(library(rattle))
+### Data quality check
 
-# Seed the random number generator to make the results reproducible.
-set.seed(315)
-```
+Got a sense of the data structure by running commands such as:
 
-## Data quality check and preprocessing
+* `dim(training)` --- showed 19,622 observations and 160 variables
+* `dim(testing)` --- showed 20 observations and 160 variables
+* `colnames(training)` --- showed the names of 160 variables
+* `colSums(is.na(training)) %>% sort() %>% unique()` --- showed c(0, 19216)
+* `colSums(is.na(testing)) %>% sort() %>% unique()` --- showed c(0, 20)
 
-Get a sense of the data structure by running commands such as:
-
-* `dim(training)` --- shows 19,622 observations and 160 variables
-* `dim(testing)` --- shows 20 observations and 160 variables
-* `colnames(training)` --- names of 160 variables
-* `colSums(is.na(training)) %>% sort() %>% unique()` --- shows c(0, 19216)
-* `colSums(is.na(testing)) %>% sort() %>% unique()` --- shows c(0, 20)
-
-Results of the `colSums()` runs show that there are variables that were unobserved in a large number of cases. Therefore, it is necessary to remove them.
+The results of `colSums()` showed that there were variables with many missing values. These were removed.
 
 ```{r remove_NA}
-# Retain only those variables with no missing values, then store in new variables.
+# Retain only those variables with no missing values; store in new variables.
 tr <- training[, which(colSums(is.na(training)) == 0)]
 ts <- testing[, which(colSums(is.na(testing)) == 0)]
 
-# Exclude the first seven variables from the predictors from both the training
-# and testing data. They are just descriptor variables.
+# Exclude the first seven variables as predictors. They appear to be only descriptor variables.
 tr <- tr[, -c(1:7)]
 ts <- ts[, -c(1:7)]
 ```
 
-It is time to do preprocessing to remove near-zero variance variables, and variables that are collinear.
+### Preprocess
+
+Do preprocessing to remove near-zero variance variables and colinearity.
+
 ```{r preprocess}
 # Preprocess the datasets to remove near-zero variance variables and collinear
 # variables.
 prep <- preProcess(tr[, -53], method = c("nzv", "corr"))
 tr <- predict(prep, tr)
 ts <- predict(prep, ts)
-# Note: No need to scale/center the data since classification trees and random
-# forest methods will be used as prediction models.
+# Note: No need to scale/center the data since classification trees, stochastic gradient boosting, and random forest methods will be used as prediction models.
 ```
 
+### Data splitting
 
-## Data splitting
-
-Split the `tr` (training) data into a training and validation subsets to estimate out-of-sample errors and other parameters prior to doing predictions on the testing data.
+Split the `tr` (training) data into a training and validation subsets to estimate out-of-sample errors (primarily) and other parameters prior to doing predictions on the testing data.
 
 ```{r data_splitting}
-# Split the training data to be able to estimate the out-of-sample error. This
-# error will be used to judge the accuracy of the prediction model. Use a 70-30 partition scheme as recommended in the lecture.
+# Split the training data to be able to estimate the out-of-sample error. A 70-30 partition scheme as recommended in the lecture.
 idx <- createDataPartition(tr$classe, p = 0.70, list = F)
 
 # Partition the training data superset into training and validation subsets.
@@ -91,14 +83,19 @@ tr.training <- tr[idx, ]
 tr.validation <- tr[-idx, ]
 ```
 
+## Resampling using cross-validation
+
+```{r cross_validation}
+# Decide on a training control strategy. Choose a relatively low number to
+# prevent overfitting; use the value recommended from the lecture.
+fit_control <- trainControl(method = "cv", number = 5)
+```
 
 ## Training three prediction models
 
-```{r training}
-# Decide on a training control strategy. Choose a relatively low number to
-# prevent overfitting. Use the recommended number of iterations.
-fit_control <- trainControl(method = "cv", number = 5)
+Compare three prediction models and choose the best one based on the training and validation accuracies.
 
+```{r training}
 # Do classification trees modeling
 fit_rpart <- train(classe ~ ., data = tr.training, method = "rpart",
                    trControl = fit_control)
@@ -118,7 +115,7 @@ fit_rf <- train(classe ~ ., data = tr.training,
 print(fit_rf)
 ```
 
-Results show that classfication tree (RPART) had an accuracy of ~52%, stochastic gradient boosting (GBM) ~96%, and random forest (RF) ~99%. RF, therefore, shows the highest prediction accuracy rate on the training data.
+Results show that classfication tree (RPART) had an accuracy of ~57%, stochastic gradient boosting (GBM) ~96%, and random forest (RF) ~99%. RF, therefore, shows the highest prediction accuracy rate on the training data.
 
 ## Plotting the predictive models
 
@@ -143,6 +140,11 @@ confusionMatrix(tr.validation$classe, predict_gbm)
 confusionMatrix(tr.validation$classe, predict_rf)
 ```
 
+### Out-of-sample error
+
+Based on the confusion matrices, the **random forest** has the lower out-of-sample error rate of only **0.58%**. The highest was classificaiton tree with 49.96%. Stochastic gradient boosting had an out-of-sample error rate of that was close to RF with 3.7%.
+
+
 ## Prediction on testing data
 
 ```{r prediction_test_data}
@@ -152,6 +154,9 @@ predict(fit_rf, ts)
 ```
 
 
+## Final thoughts
+
+I chose classification predictive models because the outcome variable is **categorical** (qualitative). Classification tree (rpart), stochastic gradient boosting (gbm), and random forest (rf) were among the popular choices of algorithms. I chose them because I expected that rpart would differ greatly from both gbm and rf, as stated in the lecture and from the reading materials. Out-of-sample errors computed using the validation subset (tr.validation) showed that **RF** had the highest accuracy. GBM was a fraction of a percentage point closer to rf. These results were consistent when the three models were used to predict the *classe* values for the testing set. 
 
 
 
