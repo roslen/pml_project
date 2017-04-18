@@ -1,0 +1,158 @@
+---
+title: "PML Peer-graded Assignment"
+author: "Roslen Anacleto"
+date: "4/18/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background (*from the course site*)
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset).
+
+## Goal of this project (*from the course site*)
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+## Data
+
+```{r data_loading}
+# Load the training and testing data as prescribed in the instuctions.
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                     header = T, na.strings = c("", "NA"))
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                    header = T, na.strings = c("", "NA"))
+# Data source: http://groupware.les.inf.puc-rio.br/har. Note: prior to doing 
+# read.csv() on these data sets, I manually downloaded them and found that 1.
+# the files had headers, and 2. there were either "" and "NA" to represent
+# missing values.
+```
+
+## Do initializations
+
+```{r initialize, results='hide', warning=FALSE}
+# Load the required libraries.
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(rattle))
+
+# Seed the random number generator to make the results reproducible.
+set.seed(315)
+```
+
+## Data quality check and preprocessing
+
+Get a sense of the data structure by running commands such as:
+
+* `dim(training)` --- shows 19,622 observations and 160 variables
+* `dim(testing)` --- shows 20 observations and 160 variables
+* `colnames(training)` --- names of 160 variables
+* `colSums(is.na(training)) %>% sort() %>% unique()` --- shows c(0, 19216)
+* `colSums(is.na(testing)) %>% sort() %>% unique()` --- shows c(0, 20)
+
+Results of the `colSums()` runs show that there are variables that were unobserved in a large number of cases. Therefore, it is necessary to remove them.
+
+```{r remove_NA}
+# Retain only those variables with no missing values, then store in new variables.
+tr <- training[, which(colSums(is.na(training)) == 0)]
+ts <- testing[, which(colSums(is.na(testing)) == 0)]
+
+# Exclude the first seven variables from the predictors from both the training
+# and testing data. They are just descriptor variables.
+tr <- tr[, -c(1:7)]
+ts <- ts[, -c(1:7)]
+```
+
+It is time to do preprocessing to remove near-zero variance variables, and variables that are collinear.
+```{r preprocess}
+# Preprocess the datasets to remove near-zero variance variables and collinear
+# variables.
+prep <- preProcess(tr[, -53], method = c("nzv", "corr"))
+tr <- predict(prep, tr)
+ts <- predict(prep, ts)
+# Note: No need to scale/center the data since classification trees and random
+# forest methods will be used as prediction models.
+```
+
+
+## Data splitting
+
+Split the `tr` (training) data into a training and validation subsets to estimate out-of-sample errors and other parameters prior to doing predictions on the testing data.
+
+```{r data_splitting}
+# Split the training data to be able to estimate the out-of-sample error. This
+# error will be used to judge the accuracy of the prediction model. Use a 70-30 partition scheme as recommended in the lecture.
+idx <- createDataPartition(tr$classe, p = 0.70, list = F)
+
+# Partition the training data superset into training and validation subsets.
+tr.training <- tr[idx, ]
+tr.validation <- tr[-idx, ]
+```
+
+
+## Training three prediction models
+
+```{r training}
+# Decide on a training control strategy. Choose a relatively low number to
+# prevent overfitting. Use the recommended number of iterations.
+fit_control <- trainControl(method = "cv", number = 5)
+
+# Do classification trees modeling
+fit_rpart <- train(classe ~ ., data = tr.training, method = "rpart",
+                   trControl = fit_control)
+print(fit_rpart)
+
+# Try stochastic gradient boosting
+fit_gbm <- train(classe ~ ., data = tr.training,
+                 method = "gbm",
+                 trControl = fit_control,
+                 verbose = F)
+print(fit_gbm)
+
+# Try random forest
+fit_rf <- train(classe ~ ., data = tr.training,
+                method = "rf",
+                trControl = fit_control)
+print(fit_rf)
+```
+
+Results show that classfication tree (RPART) had an accuracy of ~52%, stochastic gradient boosting (GBM) ~96%, and random forest (RF) ~99%. RF, therefore, shows the highest prediction accuracy rate on the training data.
+
+## Plotting the predictive models
+
+```{r plotting}
+# Then, plot the final models
+fancyRpartPlot(fit_rpart$finalModel, main = "Classification Tree")
+plot(fit_gbm, main = "Stochastic Gradient Boosting")
+plot(fit_rf, main = "Random Forest")
+```
+
+## Predictions on the validation data
+
+```{r predictions_validation}
+# Use the respective fitted models to prediction the classe values in the validation set.
+predict_rpart <- predict(fit_rpart, tr.validation)
+predict_gbm <- predict(fit_gbm, tr.validation)
+predict_rf <- predict(fit_rf, tr.validation)
+
+# Show confusion matrices of the three prediction models
+confusionMatrix(tr.validation$classe, predict_rpart)
+confusionMatrix(tr.validation$classe, predict_gbm)
+confusionMatrix(tr.validation$classe, predict_rf)
+```
+
+## Prediction on testing data
+
+```{r prediction_test_data}
+# Now, predict the test set using the random forest since it shows the highest
+# accuracy.
+predict(fit_rf, ts)
+```
+
+
+
+
+
+
